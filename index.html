@@ -287,7 +287,8 @@ body.readonly .toolbar { display:none; }
   </div>
 </div>
 <div class="metrics">
-  <div class="mc"><div class="mc-label">Stage-gate pass rate</div><div class="mc-val" id="m-rate">&#8212;</div><div class="mc-sub" id="m-sub">No gates due yet</div></div>
+  <div class="mc"><div class="mc-label">Stage-gate health</div><div class="mc-val" id="sgh" style="font-size:14px;padding-top:5px;">&#8212;</div><div class="mc-sub" id="sgh-sub">Add gates to generate signal</div></div>
+  <div class="mc"><div class="mc-label">Stage-gate pass rate</div><div class="mc-val" id="m-rate">&#8212;</div><div class="mc-sub" id="m-sub">No gates due yet</div><div class="mc-sub" id="m-sub2" style="opacity:.75;"></div></div>
   <div class="mc"><div class="mc-label">Open high-risk items</div><div class="mc-val" id="r-rate">&#8212;</div><div class="mc-sub" id="r-sub">No FMEA items added</div></div>
   <div class="mc"><div class="mc-label">Overall signal</div><div class="mc-val" id="sig" style="font-size:14px;padding-top:5px;">&#8212;</div><div class="mc-sub" id="sig-sub">Add data to generate signal</div></div>
 </div>
@@ -1367,27 +1368,94 @@ function renderRk(){
   }).join('');
 }
 
+function isOnTimeGate(m){
+  return !!(m.status==='hit' && m.completedDate && m.date && m.completedDate <= m.date);
+}
+
+function computeStageGateHealth(){
+  /* Current stage-gate: earliest-due unfinished; if all passed, final gate by date.
+     Undated gates are excluded from the current-gate search. */
+  var sg = sortedGates().filter(function(e){ return !!e.m.date; });
+  if(!sg.length) return { color:null, label:'\u2014', reason:'Add gates to generate signal' };
+
+  var current = null, currentIdx = -1;
+  for(var i=0; i<sg.length; i++){
+    var s = sg[i].m.status;
+    if(s !== 'hit' && s !== 'missed'){ current = sg[i].m; currentIdx = i; break; }
+  }
+  if(!current){ /* all gates done (passed or missed) — final gate is current */
+    currentIdx = sg.length-1; current = sg[currentIdx].m;
+  }
+  var previous = currentIdx > 0 ? sg[currentIdx-1].m : null;
+  var today    = new Date().toISOString().slice(0,10);
+
+  /* Rule 1 — previous gate missed → RED */
+  if(previous && previous.status === 'missed'){
+    return { color:'#E24B4A', label:'At risk', reason:'Previous gate missed' };
+  }
+
+  /* Rule 2 — current gate overdue */
+  if(current.status !== 'hit'){
+    if(current.locked && current.lockedDate){
+      if(today > current.lockedDate){
+        var pastCatchup = current.date && current.date > current.lockedDate;
+        return { color:'#E24B4A', label:'At risk',
+          reason: pastCatchup ? 'Current gate past baseline' : 'Current gate overdue' };
+      }
+    } else {
+      if(current.date && today > current.date){
+        return { color:'#E24B4A', label:'At risk', reason:'Current gate overdue' };
+      }
+    }
+  }
+
+  /* Rule 3 — previous gate passed late → ORANGE */
+  if(previous && previous.status === 'hit' && !isOnTimeGate(previous)){
+    return { color:'#BA7517', label:'Watch closely', reason:'Previous gate passed late' };
+  }
+
+  /* Rule 4 — GREEN */
+  return { color:'#639922', label:'On schedule', reason:'Current gate on track' };
+}
+
 function renderMetrics(){
   var w   = getCurWeek();
   var due = milestones.filter(function(m){ var gw=dateToWeek(m.date); return gw!==null && gw<=w; });
   var hit = due.filter(function(m){ return m.status==='hit'; });
-  var hr  = due.length ? Math.round(hit.length/due.length*100) : null;
+  var onTime = hit.filter(isOnTimeGate);
+  /* Headline = on-time pass rate (new primary metric) */
+  var otRate = due.length ? Math.round(onTime.length/due.length*100) : null;
   var openHigh  = risks.filter(function(r){ return worstUnresolvedRpn(r)>=200; }).length;
   var totalRisks = risks.length;
-  document.getElementById('m-rate').textContent = hr!==null ? hr+'%' : '\u2014';
-  document.getElementById('m-sub').textContent  = due.length ? hit.length+' of '+due.length+' due gates passed' : 'No gates due yet';
+
+  document.getElementById('m-rate').textContent = otRate!==null ? otRate+'%' : '\u2014';
+  document.getElementById('m-sub').textContent  = due.length ? onTime.length+' of '+due.length+' gates passed on time' : 'No gates due yet';
+  document.getElementById('m-sub2').textContent = due.length ? hit.length+' of '+due.length+' gates passed' : '';
+
   document.getElementById('r-rate').textContent = totalRisks ? openHigh : '\u2014';
   document.getElementById('r-sub').textContent  = totalRisks ? (openHigh===0 ? 'No high-RPN items open' : openHigh+' problem'+(openHigh>1?'s':'')+' with RPN \u2265 200') : 'No FMEA items added';
+
+  /* Stage-gate health indicator */
+  var sgh = computeStageGateHealth();
+  var sghEl = document.getElementById('sgh'), sghSub = document.getElementById('sgh-sub');
+  if(sgh.color){
+    sghEl.innerHTML = '<span class="sdot" style="background:'+sgh.color+';"></span>'+sgh.label;
+  } else {
+    sghEl.innerHTML = '\u2014';
+  }
+  sghSub.textContent = sgh.reason;
+
+  /* Overall signal */
   var sigEl = document.getElementById('sig'), subEl = document.getElementById('sig-sub');
-  if(hr===null && !totalRisks){ sigEl.innerHTML='\u2014'; subEl.textContent='Add data to generate signal'; return; }
-  var h     = hr!==null ? hr : 100;
+  if(otRate===null && !totalRisks){ sigEl.innerHTML='\u2014'; subEl.textContent='Add data to generate signal'; return; }
+  var h     = otRate!==null ? otRate : 100;
   var slips = milestones.filter(function(m){ return m.slipped && m.status!=='hit' && m.status!=='missed'; }).length;
   var color, label, reason;
   if(slips>=2 || (slips>=1 && h<60) || openHigh>=3){
     color='#E24B4A'; label='At risk';
     reason = openHigh>=3 ? openHigh+' high-RPN problems unresolved' : slips+' catch-up plan'+(slips>1?'s':'')+' active';
   } else if(h>=70 && slips===0 && openHigh===0){
-    color='#639922'; label='On track'; reason='Gate pass rate healthy, no high-RPN items open';
+    color='#639922'; label='On track'; reason='On-time pass rate healthy, no high-RPN items open';
   } else if(h<50 || (w>=6 && openHigh>=2)){
     color='#E24B4A'; label='At risk'; reason='Recovery within quarter is unlikely';
   } else {
@@ -1406,9 +1474,13 @@ function renderBars(){
   for(var i=1; i<=13; i++){
     var due  = milestones.filter(function(m){ var gw=dateToWeek(m.date); return gw!==null && gw<=i; });
     var hit  = due.filter(function(m){ return m.status==='hit'; });
-    var rate = due.length ? hit.length/due.length : null;
-    var h    = rate!==null ? Math.round(rate*44) : 0;
-    var bg   = (i>w || rate===null) ? '#ddd' : rate>=0.7 ? '#639922' : rate>=0.5 ? '#BA7517' : '#E24B4A';
+    var onTime = hit.filter(isOnTimeGate);
+    /* Height = absolute completion rate */
+    var absRate = due.length ? hit.length/due.length : null;
+    var h       = absRate!==null ? Math.round(absRate*44) : 0;
+    /* Colour = on-time completion rate */
+    var otRate = due.length ? onTime.length/due.length : null;
+    var bg   = (i>w || otRate===null) ? '#ddd' : otRate>=0.7 ? '#639922' : otRate>=0.5 ? '#BA7517' : '#E24B4A';
     html += '<div class="bw"><div class="b'+(i===w?' b-now':'')+'" style="height:'+Math.max(h,2)+'px;background:'+bg+';width:100%;"></div><div class="bwk">'+i+'</div></div>';
   }
   document.getElementById('bars').innerHTML = html;
