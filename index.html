@@ -538,6 +538,46 @@ function addOneDay(dateStr){
   return d.toISOString().slice(0,10);
 }
 
+/* The effective end date of a gate for the purpose of cascading the next
+   gate's start date. A gate that was marked passed AFTER its due date
+   propagates its actual completion date to downstream gates; otherwise
+   (on-time pass, in-progress, or not yet due) use the due date. */
+function effectiveGateEnd(gate){
+  if(!gate) return '';
+  if(gate.status==='hit' && gate.completedDate && gate.date && gate.completedDate > gate.date){
+    return gate.completedDate;
+  }
+  return gate.date || '';
+}
+
+/* Walk gates in date order. For each gate that completed late (completedDate
+   > date), push every downstream UNLOCKED, UNCOMPLETED gate's due date
+   forward by at least one day past the prev gate's effective end. Mutates
+   milestones in place so the shift is visible in both the tracker UI and
+   the pushed Gantt payload. Returns true if any gate was shifted. */
+function cascadeSlipThroughGates(){
+  var sg = sortedGates().filter(function(e){ return !!e.m.date; });
+  var changed = false;
+  for(var i=1; i<sg.length; i++){
+    var prev = sg[i-1].m;
+    var curr = sg[i].m;
+    /* Don't shift if current gate is locked (user explicitly committed to date)
+       or already completed. */
+    if(curr.locked) continue;
+    if(curr.status === 'hit' || curr.status === 'missed') continue;
+    var prevEnd = effectiveGateEnd(prev);
+    if(!prevEnd) continue;
+    var earliest = addOneDay(prevEnd);
+    if(curr.date < earliest){
+      curr.date = earliest;
+      /* If the gate had a baseline, it's now slipped. */
+      if(curr.lockedDate && curr.date !== curr.lockedDate) curr.slipped = true;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 /* Compute the start date for a stage-gate Gantt sub-project.
    prevGateDate : due date of the immediately preceding gate ('' if none).
    parentId     : Gantt objective ID used to look up objective start as fallback. */
@@ -794,7 +834,7 @@ function saveGate(){
       kpis:draftKpis.slice(), dependencies:draftDeps.slice(), status:'pending', locked:draftLocked,
       lockedDate:draftLocked?newDate:null, slipped:false, completedDate:null });
   }
-  closeGateModal(); save(); render(); autoSyncToGantt();
+  closeGateModal(); cascadeSlipThroughGates(); save(); render(); autoSyncToGantt();
 }
 
 /* KPI modal */
@@ -1111,6 +1151,8 @@ function setMs(i, status){
       if(nextM.status === 'active') nextM.status = 'pending';
     }
   }
+  /* Propagate any late-completion slip to downstream gates */
+  cascadeSlipThroughGates();
   save(); render(); autoSyncToGantt();
 }
 function delMs(i){
@@ -1520,6 +1562,8 @@ async function autoSyncToGantt(){
   var binId  = GANTT_BIN_ID  || s.binId;
   var apiKey = GANTT_API_KEY || s.apiKey;
   if(!binId || !apiKey || !s.parentId) return;
+  /* Cascade any late-completion slip forward before pushing */
+  if(cascadeSlipThroughGates()) save();
   showSyncIndicator('syncing');
   try {
     var resp = await fetch('https://api.jsonbin.io/v3/b/'+binId+'/latest',{
@@ -1554,7 +1598,7 @@ async function autoSyncToGantt(){
         }
       }
       var fields=buildGanttStageGate(gate,s,prevGateEnd,prevGanttId);
-      prevGateEnd = gate.date;
+      prevGateEnd = effectiveGateEnd(gate);
       if(gate.ganttMilestoneId){
         var found=-1;
         for(var k=0; k<ganttData.projects.length; k++){ if(ganttData.projects[k].id===gate.ganttMilestoneId){ found=k; break; } }
@@ -1594,8 +1638,8 @@ async function autoSyncToGantt(){
           tId=te.id; break;
         }
       }
-      /* Start = depEnd + 1 day via shared computeGateStart */
-      var prevGateDateT = idx > 0 ? filteredSg[idx-1].m.date : '';
+      /* Start = effective prev end + 1 day (accounts for late completion) */
+      var prevGateDateT = idx > 0 ? effectiveGateEnd(filteredSg[idx-1].m) : '';
       var gStart = computeGateStart(g, prevGateDateT, s.parentId);
       if(g.date && gStart > g.date) gStart = g.date;
       return{id:tId,name:g.label||'Gate',endDate:g.date,startDate:gStart,subProjectId:g.ganttMilestoneId||null,
@@ -1843,6 +1887,9 @@ async function pushToGantt(){
   if(!settings.parentId){ gsStatus('Select an objective first.', 'error'); return; }
   var sg = sortedGates();
   if(!sg.length){ gsStatus('No tracker gates to push.', 'error'); return; }
+  /* Cascade any late-completion slip forward before pushing */
+  if(cascadeSlipThroughGates()) save();
+  sg = sortedGates(); /* re-read in case cascade reordered anything */
   gsStatus('Fetching Gantt data\u2026', 'loading');
   try {
     var resp = await fetch('https://api.jsonbin.io/v3/b/'+settings.binId+'/latest',{
@@ -1875,7 +1922,7 @@ async function pushToGantt(){
         }
       }
       var fields = buildGanttStageGate(gate, settings, prevGateEnd2, prevGanttId2);
-      prevGateEnd2 = gate.date;
+      prevGateEnd2 = effectiveGateEnd(gate);
       if(gate.ganttMilestoneId){
         var found=-1;
         for(var k=0; k<ganttData.projects.length; k++){ if(ganttData.projects[k].id===gate.ganttMilestoneId){ found=k; break; } }
@@ -1911,7 +1958,7 @@ async function pushToGantt(){
           tId=te.id; break;
         }
       }
-      var prevGateDateT2 = idx > 0 ? filteredSg2[idx-1].m.date : '';
+      var prevGateDateT2 = idx > 0 ? effectiveGateEnd(filteredSg2[idx-1].m) : '';
       var gStart2 = computeGateStart(g, prevGateDateT2, settings.parentId);
       if(g.date && gStart2 > g.date) gStart2 = g.date;
       return { id:tId, name:g.label||'Gate', endDate:g.date, startDate:gStart2, subProjectId:g.ganttMilestoneId||null,
