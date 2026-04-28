@@ -1110,22 +1110,22 @@ function saveFmea(){
   draftRisk.gateId  = document.getElementById('f-gate').value || null;
   if(editingRiskIdx !== null) risks[editingRiskIdx] = draftRisk;
   else risks.push(draftRisk);
-  closeFmeaModal(); save(); render();
+  closeFmeaModal(); save(); render(); autoSyncToGantt();
 }
 
-function setProblemStatus(ri, status){ risks[ri].status=status; save(); render(); }
-function setModeStatus(ri, mi, status){ risks[ri].modes[mi].status=status; save(); render(); }
-function setEffectStatus(ri, mi, ei, status){ risks[ri].modes[mi].effects[ei].status=status; save(); render(); }
+function setProblemStatus(ri, status){ risks[ri].status=status; save(); render(); autoSyncToGantt(); }
+function setModeStatus(ri, mi, status){ risks[ri].modes[mi].status=status; save(); render(); autoSyncToGantt(); }
+function setEffectStatus(ri, mi, ei, status){ risks[ri].modes[mi].effects[ei].status=status; save(); render(); autoSyncToGantt(); }
 
 /* Direct card updates */
-function setCauseStatus(ri, mi, ei, ci, status){ risks[ri].modes[mi].effects[ei].causes[ci].status = status; save(); render(); }
+function setCauseStatus(ri, mi, ei, ci, status){ risks[ri].modes[mi].effects[ei].causes[ci].status = status; save(); render(); autoSyncToGantt(); }
 function delCause(ri, mi, ei, ci){
   risks[ri].modes[mi].effects[ei].causes.splice(ci,1);
   if(!risks[ri].modes[mi].effects[ei].causes.length) risks[ri].modes[mi].effects.splice(ei,1);
   if(!risks[ri].modes[mi].effects.length) risks[ri].modes.splice(mi,1);
-  save(); render();
+  save(); render(); autoSyncToGantt();
 }
-function delRk(ri){ risks.splice(ri,1); save(); render(); }
+function delRk(ri){ risks.splice(ri,1); save(); render(); autoSyncToGantt(); }
 
 /* Gate actions */
 function setMs(i, status){
