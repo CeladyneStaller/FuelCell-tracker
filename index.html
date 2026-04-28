@@ -1665,18 +1665,43 @@ function writeTrackerData(ganttData, parentId){
   ganttData._trackerData[String(parentId)] = { risks: risks, deletedGanttIds: deletedGanttIds };
 }
 function readTrackerData(ganttData, parentId){
-  if(!parentId || !ganttData._trackerData) return false;
-  var td = ganttData._trackerData[String(parentId)];
-  if(!td) return false;
+  if(!ganttData._trackerData) return false;
   var changed = false;
-  /* Merge risks */
-  if(Array.isArray(td.risks) && JSON.stringify(td.risks) !== JSON.stringify(risks)){
-    risks = td.risks; changed = true;
+  var pidKey  = parentId ? String(parentId) : null;
+  var primary = (pidKey && ganttData._trackerData[pidKey]) || null;
+  var primaryRisks = primary && Array.isArray(primary.risks) ? primary.risks : [];
+
+  /* Collect risks from this tracker's storage. If the primary key has risks,
+     use those. If empty (likely a parentId mismatch from an earlier save),
+     fall back to scanning all keys for risks whose gateId matches one of our
+     local milestone gids OR risks with no gateId (project-wide).
+     Either way, ungated risks at the primary key are always included. */
+  var collected = primaryRisks.slice();
+  if(!primaryRisks.length){
+    var localGids = {};
+    for(var mi=0; mi<milestones.length; mi++){ if(milestones[mi].gid) localGids[milestones[mi].gid] = true; }
+    Object.keys(ganttData._trackerData).forEach(function(k){
+      if(k === pidKey) return;
+      var arr = ganttData._trackerData[k] && ganttData._trackerData[k].risks;
+      if(!Array.isArray(arr)) return;
+      for(var ri=0; ri<arr.length; ri++){
+        var r = arr[ri];
+        if(!r.gateId || localGids[r.gateId]) collected.push(r);
+      }
+    });
   }
-  /* Merge tombstones — union of both sides */
-  if(Array.isArray(td.deletedGanttIds)){
+
+  if(collected.length && JSON.stringify(collected) !== JSON.stringify(risks)){
+    risks = collected; changed = true;
+  } else if(!collected.length && risks.length){
+    /* Don't wipe local risks when remote is empty — could be a transient sync
+       issue. Local risks get pushed back on next autoSync. */
+  }
+
+  /* Merge tombstones — union of both sides (primary key only) */
+  if(primary && Array.isArray(primary.deletedGanttIds)){
     var before = deletedGanttIds.length;
-    td.deletedGanttIds.forEach(function(id){
+    primary.deletedGanttIds.forEach(function(id){
       if(deletedGanttIds.indexOf(id) === -1) deletedGanttIds.push(id);
     });
     if(deletedGanttIds.length !== before) changed = true;
