@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Q Tracker</title>
+<title>Fuel Cell Stage-gate Tracker</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;}
 body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:13px;background:#f7f7f5;color:#1a1a1a;padding:2rem;}
@@ -277,7 +277,7 @@ body.readonly .toolbar { display:none; }
 </head>
 <body>
 <div class="wrap">
-<h1>Quarter tracker <span id="proj-display"></span></h1>
+<h1>Fuel Cell Stage-gate Tracker<span id="proj-display"></span></h1>
 <div class="setup-row">
   <div><span class="lbl">Project</span><input type="text" id="proj" placeholder="Project name" oninput="save();updateTitle()"></div>
   <div><span class="lbl">Quarter</span><input type="text" id="qtr" placeholder="e.g. Q2 2026" oninput="save();updateTitle()"></div>
@@ -405,11 +405,11 @@ body.readonly .toolbar { display:none; }
 <!-- KPI modal -->
 <div class="overlay" id="kpi-overlay" style="z-index:200;" onclick="if(event.target===this)closeKpiModal()">
   <div class="modal modal-sm">
-    <div class="modal-title">Add KPI target</div>
+    <div class="modal-title" id="kpi-modal-title">Add KPI target</div>
     <div class="modal-field"><span class="lbl">KPI</span><input type="text" id="k-name" placeholder="e.g. Power density"></div>
     <div class="modal-field"><span class="lbl">Target</span><input type="text" id="k-target" placeholder="e.g. &ge; 1.0"></div>
     <div class="modal-field"><span class="lbl">Unit</span><input type="text" id="k-unit" placeholder="e.g. W/cm&sup2;"></div>
-    <div class="modal-actions"><button onclick="closeKpiModal()">Cancel</button><button class="btn-primary" onclick="saveKpi()">Save target</button></div>
+    <div class="modal-actions"><button onclick="closeKpiModal()">Cancel</button><button class="btn-primary" id="kpi-save-btn" onclick="saveKpi()">Save target</button></div>
   </div>
 </div>
 
@@ -512,6 +512,7 @@ var milestones = [];
 var risks = [];
 var deletedGanttIds = []; /* tombstone: Gantt project IDs deleted from either side */
 var draftKpis = [];
+var editingKpiIdx = null;
 var draftDeps = [];   /* [{ganttProjectId, name, division, type}] */
 var draftRisk = null;
 var ganttCache = null; /* last-fetched Gantt projects array */
@@ -839,15 +840,37 @@ function saveGate(){
 
 /* KPI modal */
 function openKpiModal(){
+  editingKpiIdx = null;
   document.getElementById('k-name').value=''; document.getElementById('k-target').value=''; document.getElementById('k-unit').value='';
+  document.getElementById('kpi-modal-title').textContent = 'Add KPI target';
+  document.getElementById('kpi-save-btn').textContent = 'Save target';
   document.getElementById('kpi-overlay').classList.add('open');
   setTimeout(function(){ document.getElementById('k-name').focus(); }, 50);
 }
-function closeKpiModal(){ document.getElementById('kpi-overlay').classList.remove('open'); }
+function openEditKpiModal(i){
+  if(i<0 || i>=draftKpis.length) return;
+  var k = draftKpis[i];
+  editingKpiIdx = i;
+  document.getElementById('k-name').value   = k.name   || '';
+  document.getElementById('k-target').value = k.target || '';
+  document.getElementById('k-unit').value   = k.unit   || '';
+  document.getElementById('kpi-modal-title').textContent = 'Edit KPI target';
+  document.getElementById('kpi-save-btn').textContent = 'Save changes';
+  document.getElementById('kpi-overlay').classList.add('open');
+  setTimeout(function(){ document.getElementById('k-name').focus(); }, 50);
+}
+function closeKpiModal(){ document.getElementById('kpi-overlay').classList.remove('open'); editingKpiIdx = null; }
 function saveKpi(){
   var name = document.getElementById('k-name').value.trim();
   if(!name){ document.getElementById('k-name').focus(); return; }
-  draftKpis.push({ name:name, target:document.getElementById('k-target').value.trim(), unit:document.getElementById('k-unit').value.trim() });
+  var entry = { name:name,
+    target: document.getElementById('k-target').value.trim(),
+    unit:   document.getElementById('k-unit').value.trim() };
+  if(editingKpiIdx !== null && editingKpiIdx >= 0 && editingKpiIdx < draftKpis.length){
+    draftKpis[editingKpiIdx] = entry;
+  } else {
+    draftKpis.push(entry);
+  }
   closeKpiModal(); renderDraftKpis();
 }
 function delDraftKpi(i){ draftKpis.splice(i,1); renderDraftKpis(); }
@@ -855,7 +878,12 @@ function renderDraftKpis(){
   var el = document.getElementById('gate-kpi-list');
   if(!draftKpis.length){ el.innerHTML='<div class="modal-empty">No targets added</div>'; return; }
   el.innerHTML = draftKpis.map(function(k,i){
-    return '<div class="kpi-modal-row"><span>'+esc(k.name)+'</span><span style="color:#888">'+esc(k.target)+'</span><span style="color:#888">'+esc(k.unit)+'</span><button class="del-btn" onclick="delDraftKpi('+i+')">&#215;</button></div>';
+    return '<div class="kpi-modal-row" style="cursor:pointer;" onclick="openEditKpiModal('+i+')" title="Click to edit">'+
+      '<span>'+esc(k.name)+'</span>'+
+      '<span style="color:#888">'+esc(k.target)+'</span>'+
+      '<span style="color:#888">'+esc(k.unit)+'</span>'+
+      '<button class="del-btn" onclick="event.stopPropagation();delDraftKpi('+i+')">&#215;</button>'+
+    '</div>';
   }).join('');
 }
 
